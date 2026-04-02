@@ -1,0 +1,89 @@
+{
+  "$schema": "https://flow.bikare.net/schemas/module.schema.v1.json",
+  "schema_version": "1.0",
+  "key": "AdminOps",
+  "slug": "admin-ops",
+  "name": {
+    "tr": "Yönetim Operasyonları",
+    "en": "Admin Operations"
+  },
+  "family": "core",
+  "description": {
+    "tr": "Yönetici paneli operasyon araçlarını, güvenlik ve gözlemlenebilirlik süreçlerini yönetir.",
+    "en": "Manages admin panel operational tools, security, and observability workflows."
+  },
+  "version": "1.0.0",
+  "type": "official",
+  "provider": "App\\Core\\AdminOps\\AdminOpsServiceProvider",
+  "namespace": "App\\Core\\AdminOps",
+  "base_path": "app/Core/AdminOps",
+  "core": true,
+  "enabled": true,
+  "active_by_default": true,
+  "producer": "Bikare",
+  "authors": [
+    {
+      "name": "Bikare"
+    }
+  ],
+  "repository": {
+    "provider": "github",
+    "owner": "bk-flow",
+    "name": "core-admin-ops",
+    "default_branch": "main",
+    "url": "https://github.com/bk-flow/core-admin-ops"
+  },
+  "release": {
+    "channel": "stable",
+    "artifact_strategy": "github_release_asset",
+    "artifact_name_pattern": "core-admin-ops-{version}.zip"
+  },
+  "features": {
+    "has_admin_routes": true,
+    "has_api_routes": false,
+    "has_web_routes": false,
+    "has_console_routes": false,
+    "has_views": false,
+    "has_lang": true,
+    "has_migrations": false,
+    "has_seeders": false,
+    "has_assets": false,
+    "has_menu": false
+  },
+  "paths": {
+    "admin_routes": "Routes/admin.php",
+    "api_routes": null,
+    "web_routes": null,
+    "console_routes": null,
+    "views": "resources/views",
+    "lang": "resources/lang",
+    "migrations": "database/migrations",
+    "seeders": "database/seeders",
+    "assets": null
+  },
+  "menu": {
+    "enabled": false,
+    "group": null,
+    "order": null
+  },
+  "compatibility": {
+    "php": "^8.2",
+    "laravel": "^13.0",
+    "flow_core": "^1.0"
+  },
+  "dependencies": {
+    "modules": [],
+    "php_extensions": [],
+    "composer": []
+  },
+  "installation": {
+    "requires_migration": false,
+    "requires_seeding": false,
+    "requires_cache_clear": true,
+    "requires_config_publish": false
+  },
+  "update": {
+    "rollback_supported": true,
+    "breaking_change": false
+  }
+}
