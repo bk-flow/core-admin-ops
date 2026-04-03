@@ -104,7 +104,8 @@ class AdminMenuService
     }
 
     /**
-     * config/admin_menu.php yerine core taban menü.
+     * Çekirdek panel: yalnızca pano + ayarlar. Diğer üst bölümler modül `config/menu.php`
+     * içinde `placement: root` veya `group_children` ile eklenir.
      *
      * @return list<array<string,mixed>>
      */
@@ -114,32 +115,16 @@ class AdminMenuService
             [
                 'title' => 'admin.menu.dashboard.title',
                 'group' => 'dashboard',
+                'sort' => 10,
                 'sidebar_icon' => 'ki-filled ki-chart-line-star',
                 'route' => 'cms.admin.dashboard',
                 'permission' => 'dashboard_read',
                 'active_routes' => ['cms.admin.dashboard'],
             ],
             [
-                'title' => 'admin.menu.site_content.title',
-                'group' => 'site_content',
-                'sidebar_icon' => 'ki-filled ki-document',
-                'children' => [],
-            ],
-            [
-                'title' => 'admin.menu.billing_hub.title',
-                'group' => 'billing_hub',
-                'sidebar_icon' => 'ki-filled ki-cheque',
-                'children' => [],
-            ],
-            [
-                'title' => 'admin.menu.users_operations.title',
-                'group' => 'users_operations',
-                'sidebar_icon' => 'ki-filled ki-users',
-                'children' => [],
-            ],
-            [
                 'title' => 'admin.menu.settings.title',
                 'group' => 'settings',
+                'sort' => 10000,
                 'sidebar_icon' => 'ki-filled ki-setting-2',
                 'children' => [
                     [
@@ -250,14 +235,30 @@ class AdminMenuService
             $registry = app(ModuleRegistry::class);
             $contributions = $registry->activeMenuContributions();
         } catch (\Throwable) {
-            return $baseMenu;
+            return $this->sortTopLevelMenu($baseMenu);
         }
 
+        $rootContributions = [];
+        $groupContributions = [];
         foreach ($contributions as $contribution) {
-            if (($contribution['placement'] ?? '') !== 'group_children') {
-                continue;
+            $p = (string) ($contribution['placement'] ?? '');
+            if ($p === 'root') {
+                $rootContributions[] = $contribution;
+            } elseif ($p === 'group_children') {
+                $groupContributions[] = $contribution;
             }
+        }
 
+        if (count($baseMenu) < 2) {
+            $menu = $baseMenu;
+        } else {
+            $dashboard = $baseMenu[0];
+            $settings = $baseMenu[1];
+            $mergedRoots = $this->mergeRootMenuNodes($rootContributions);
+            $menu = array_merge([$dashboard], $mergedRoots, [$settings]);
+        }
+
+        foreach ($groupContributions as $contribution) {
             $group = (string) ($contribution['group'] ?? '');
             $item = $contribution['item'] ?? null;
             if ($group === '' || ! is_array($item)) {
@@ -272,7 +273,7 @@ class AdminMenuService
             }
 
             $matched = false;
-            foreach ($baseMenu as &$menuGroup) {
+            foreach ($menu as &$menuGroup) {
                 if (($menuGroup['group'] ?? '') !== $targetGroup) {
                     continue;
                 }
@@ -310,16 +311,151 @@ class AdminMenuService
 
             if (! $matched) {
                 $groupMeta = $this->defaultGroupMeta($group);
-                $baseMenu[] = [
+                $menu[] = [
                     'title' => $groupMeta['title'],
                     'group' => $group,
                     'sidebar_icon' => $groupMeta['sidebar_icon'],
+                    'sort' => $groupMeta['sort'],
                     'children' => [$item],
                 ];
             }
         }
 
-        return $baseMenu;
+        return $this->sortTopLevelMenu($menu);
+    }
+
+    /**
+     * Üst menü satırlarını `sort` alanına göre sıralar (düşük önce).
+     *
+     * @param  list<array<string,mixed>>  $menu
+     * @return list<array<string,mixed>>
+     */
+    private function sortTopLevelMenu(array $menu): array
+    {
+        usort($menu, function (array $a, array $b): int {
+            return ($a['sort'] ?? 500) <=> ($b['sort'] ?? 500);
+        });
+
+        return array_values($menu);
+    }
+
+    /**
+     * `placement: root` ile gelen tam ağaçları `group` anahtarına göre birleştirir (aynı rail grubuna çoklu modül).
+     *
+     * @param  list<array<string, mixed>>  $rootContributions
+     * @return list<array<string,mixed>>
+     */
+    private function mergeRootMenuNodes(array $rootContributions): array
+    {
+        $byGroup = [];
+
+        foreach ($rootContributions as $contribution) {
+            $items = $contribution['items'] ?? null;
+            if (! is_array($items)) {
+                continue;
+            }
+
+            $moduleKey = (string) ($contribution['module_key'] ?? 'misc');
+            $entryPriority = (int) ($contribution['priority'] ?? 500);
+
+            foreach ($items as $node) {
+                if (! is_array($node)) {
+                    continue;
+                }
+
+                $group = (string) ($node['group'] ?? '');
+                if ($group === '') {
+                    $group = 'module_'.$this->slugifyMenuGroup($moduleKey);
+                }
+
+                $sort = (int) ($node['sort'] ?? $entryPriority);
+
+                if (! isset($byGroup[$group])) {
+                    $node['group'] = $group;
+                    $node['sort'] = $sort;
+                    $byGroup[$group] = $node;
+
+                    continue;
+                }
+
+                $existing = &$byGroup[$group];
+                $existing['sort'] = min((int) ($existing['sort'] ?? 500), $sort);
+
+                $newChildren = $node['children'] ?? [];
+                $oldChildren = $existing['children'] ?? [];
+                if (is_array($newChildren) && $newChildren !== []) {
+                    $existing['children'] = $this->mergeMenuChildrenDedupe(
+                        is_array($oldChildren) ? $oldChildren : [],
+                        $newChildren
+                    );
+                }
+
+                unset($existing);
+            }
+        }
+
+        return array_values($byGroup);
+    }
+
+    private function slugifyMenuGroup(string $key): string
+    {
+        $s = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $key) ?? $key);
+
+        return trim($s, '_') !== '' ? trim($s, '_') : 'misc';
+    }
+
+    /**
+     * @param  list<array<string,mixed>>  $existing
+     * @param  list<array<string,mixed>>  $incoming
+     * @return list<array<string,mixed>>
+     */
+    private function mergeMenuChildrenDedupe(array $existing, array $incoming): array
+    {
+        $seen = [];
+        foreach ($existing as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $id = $this->menuItemDedupeIdentity($item);
+            if ($id !== '') {
+                $seen[$id] = true;
+            }
+        }
+
+        $out = $existing;
+        foreach ($incoming as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $id = $this->menuItemDedupeIdentity($item);
+            if ($id !== '' && isset($seen[$id])) {
+                continue;
+            }
+            if ($id !== '') {
+                $seen[$id] = true;
+            }
+            $out[] = $item;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Aynı seviyede yinelenen yaprakları azaltmak için (route veya id).
+     */
+    private function menuItemDedupeIdentity(array $item): string
+    {
+        $route = $item['route'] ?? null;
+        if (is_string($route) && $route !== '' && $route !== '#') {
+            return 'route:'.$route;
+        }
+
+        $id = $item['id'] ?? null;
+        if (is_string($id) && $id !== '') {
+            return 'id:'.$id;
+        }
+
+        return '';
     }
 
     /**
@@ -360,19 +496,19 @@ class AdminMenuService
     }
 
     /**
-     * @return array{title:string,sidebar_icon:string}
+     * @return array{title:string,sidebar_icon:string,sort:int}
      */
     private function defaultGroupMeta(string $group): array
     {
         return match ($group) {
-            'dashboard' => ['title' => 'admin.menu.dashboard.title', 'sidebar_icon' => 'ki-filled ki-chart-line-star'],
-            'site_content' => ['title' => 'admin.menu.site_content.title', 'sidebar_icon' => 'ki-filled ki-document'],
-            'billing_hub' => ['title' => 'admin.menu.billing_hub.title', 'sidebar_icon' => 'ki-filled ki-cheque'],
-            'settings' => ['title' => 'admin.menu.settings.title', 'sidebar_icon' => 'ki-filled ki-setting-2'],
-            'users_operations' => ['title' => 'admin.menu.users_operations.title', 'sidebar_icon' => 'ki-filled ki-users'],
-            'security' => ['title' => 'admin.menu.security.title', 'sidebar_icon' => 'ki-filled ki-security-user'],
-            'seo_management' => ['title' => 'admin.menu.seo_management.title', 'sidebar_icon' => 'ki-filled ki-search-list'],
-            default => ['title' => $group, 'sidebar_icon' => 'ki-filled ki-element-11'],
+            'dashboard' => ['title' => 'admin.menu.dashboard.title', 'sidebar_icon' => 'ki-filled ki-chart-line-star', 'sort' => 10],
+            'site_content' => ['title' => 'admin.menu.site_content.title', 'sidebar_icon' => 'ki-filled ki-document', 'sort' => 100],
+            'billing_hub' => ['title' => 'admin.menu.billing_hub.title', 'sidebar_icon' => 'ki-filled ki-cheque', 'sort' => 200],
+            'settings' => ['title' => 'admin.menu.settings.title', 'sidebar_icon' => 'ki-filled ki-setting-2', 'sort' => 10000],
+            'users_operations' => ['title' => 'admin.menu.users_operations.title', 'sidebar_icon' => 'ki-filled ki-users', 'sort' => 300],
+            'security' => ['title' => 'admin.menu.security.title', 'sidebar_icon' => 'ki-filled ki-security-user', 'sort' => 450],
+            'seo_management' => ['title' => 'admin.menu.seo_management.title', 'sidebar_icon' => 'ki-filled ki-search-list', 'sort' => 400],
+            default => ['title' => $group, 'sidebar_icon' => 'ki-filled ki-element-11', 'sort' => 650],
         };
     }
 
