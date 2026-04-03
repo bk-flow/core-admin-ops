@@ -5,6 +5,7 @@ namespace App\Core\AdminOps\Services;
 use App\Core\Auth\Models\Admin;
 use App\Core\RBAC\Support\AdminPermissionSnapshot;
 use App\Core\System\Services\Module\ModuleRegistry;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route as RouteFacade;
 
 class AdminMenuService
@@ -238,24 +239,45 @@ class AdminMenuService
             return $this->sortTopLevelMenu($baseMenu);
         }
 
+        $treeContributions = [];
         $rootContributions = [];
         $groupContributions = [];
         foreach ($contributions as $contribution) {
             $p = (string) ($contribution['placement'] ?? '');
-            if ($p === 'root') {
+            if ($p === 'tree_group') {
+                $treeContributions[] = $contribution;
+            } elseif ($p === 'root') {
                 $rootContributions[] = $contribution;
             } elseif ($p === 'group_children') {
                 $groupContributions[] = $contribution;
             }
         }
 
+        $mergedTreeByGroup = $this->mergeTreeGroupContributionsAcrossModules($treeContributions);
+
+        $settingsTreePayload = null;
+        if (isset($mergedTreeByGroup['settings'])) {
+            $settingsTreePayload = $mergedTreeByGroup['settings'];
+            unset($mergedTreeByGroup['settings']);
+        }
+
+        $treeRootItems = $this->treeMergedGroupsToRootItems($mergedTreeByGroup);
+        $syntheticTreeRoot = $treeRootItems !== []
+            ? [['placement' => 'root', 'items' => $treeRootItems, 'priority' => 500, 'module_key' => '_tree']]
+            : [];
+
+        $shellHints = $this->collectGroupShellHints(array_merge($syntheticTreeRoot, $rootContributions), $groupContributions);
+
         if (count($baseMenu) < 2) {
             $menu = $baseMenu;
         } else {
             $dashboard = $baseMenu[0];
             $settings = $baseMenu[1];
-            $mergedRoots = $this->mergeRootMenuNodes($rootContributions);
+            $mergedRoots = $this->mergeRootMenuNodes(array_merge($syntheticTreeRoot, $rootContributions));
             $menu = array_merge([$dashboard], $mergedRoots, [$settings]);
+            if ($settingsTreePayload !== null) {
+                $this->mergeTreeGroupIntoExistingRail($menu, 'settings', $settingsTreePayload);
+            }
         }
 
         foreach ($groupContributions as $contribution) {
@@ -310,18 +332,253 @@ class AdminMenuService
             unset($menuGroup);
 
             if (! $matched) {
-                $groupMeta = $this->defaultGroupMeta($group);
+                $shell = $this->resolveGroupShellForNewTopLevel($group, $shellHints, $contribution);
                 $menu[] = [
-                    'title' => $groupMeta['title'],
+                    'title' => $shell['title'],
                     'group' => $group,
-                    'sidebar_icon' => $groupMeta['sidebar_icon'],
-                    'sort' => $groupMeta['sort'],
+                    'sidebar_icon' => $shell['sidebar_icon'],
+                    'sort' => $shell['sort'],
                     'children' => [$item],
                 ];
             }
         }
 
         return $this->sortTopLevelMenu($menu);
+    }
+
+    /**
+     * Associatif `config/menu.php` ağaçlarından gelen tree_group katkılarını modüller arası birleştirir (aynı grup + aynı giriş slug'ı).
+     *
+     * @param  list<array<string, mixed>>  $treeContributions
+     * @return array<string, array{shell: array<string, mixed>, entries: array<string, array<string, mixed>>}>
+     */
+    private function mergeTreeGroupContributionsAcrossModules(array $treeContributions): array
+    {
+        $byGroup = [];
+
+        foreach ($treeContributions as $c) {
+            $g = (string) ($c['group'] ?? '');
+            if ($g === '' || ! is_array($c['entries'] ?? null)) {
+                continue;
+            }
+
+            $shellIn = is_array($c['group_shell'] ?? null) ? $c['group_shell'] : [];
+
+            if (! isset($byGroup[$g])) {
+                $byGroup[$g] = [
+                    'shell' => [],
+                    'entries' => [],
+                ];
+            }
+
+            foreach (['title', 'sidebar_icon', 'sort', 'icon', 'route', 'permission', 'active_routes', 'route_params'] as $sk) {
+                if (! isset($byGroup[$g]['shell'][$sk]) && array_key_exists($sk, $shellIn)) {
+                    $byGroup[$g]['shell'][$sk] = $shellIn[$sk];
+                }
+            }
+
+            foreach ($c['entries'] as $slug => $node) {
+                if (! is_string($slug) || ! is_array($node)) {
+                    continue;
+                }
+                if (! isset($byGroup[$g]['entries'][$slug])) {
+                    $byGroup[$g]['entries'][$slug] = $node;
+                } else {
+                    $byGroup[$g]['entries'][$slug] = $this->mergeTreeEntryNodes(
+                        $byGroup[$g]['entries'][$slug],
+                        $node
+                    );
+                }
+            }
+        }
+
+        return $byGroup;
+    }
+
+    /**
+     * @param  array<string, mixed>  $a
+     * @param  array<string, mixed>  $b
+     * @return array<string, mixed>
+     */
+    private function mergeTreeEntryNodes(array $a, array $b): array
+    {
+        $out = $a;
+        foreach (['title', 'route', 'permission', 'route_params'] as $k) {
+            if ((! isset($out[$k]) || $out[$k] === null || $out[$k] === '') && isset($b[$k])) {
+                $out[$k] = $b[$k];
+            }
+        }
+        if (isset($b['active_routes']) && is_array($b['active_routes'])) {
+            $out['active_routes'] = isset($out['active_routes']) && is_array($out['active_routes'])
+                ? array_values(array_unique(array_merge($out['active_routes'], $b['active_routes'])))
+                : $b['active_routes'];
+        }
+        if (isset($out['children'], $b['children']) && is_array($out['children']) && is_array($b['children'])) {
+            $out['children'] = $this->mergeMenuChildrenDedupe($out['children'], $b['children']);
+        } elseif (isset($b['children']) && is_array($b['children']) && (! isset($out['children']) || ! is_array($out['children']) || $out['children'] === [])) {
+            $out['children'] = $b['children'];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, array{shell: array<string, mixed>, entries: array<string, array<string, mixed>>}>  $merged
+     * @return list<array<string, mixed>>
+     */
+    private function treeMergedGroupsToRootItems(array $merged): array
+    {
+        $items = [];
+        foreach ($merged as $groupSlug => $data) {
+            $shell = $data['shell'] ?? [];
+            $entries = $data['entries'] ?? [];
+            $children = [];
+            foreach ($entries as $slug => $node) {
+                if (! is_array($node)) {
+                    continue;
+                }
+                $n = $node;
+                $n['id'] = (string) ($n['id'] ?? $slug);
+                $children[] = $n;
+            }
+            $row = [
+                'group' => (string) $groupSlug,
+                'title' => (string) ($shell['title'] ?? $groupSlug),
+                'sidebar_icon' => (string) ($shell['sidebar_icon'] ?? $shell['icon'] ?? 'ki-filled ki-element-11'),
+                'sort' => isset($shell['sort']) ? (int) $shell['sort'] : 500,
+                'children' => $children,
+            ];
+            foreach (['route', 'permission', 'active_routes', 'route_params'] as $leaf) {
+                if (array_key_exists($leaf, $shell)) {
+                    $row[$leaf] = $shell[$leaf];
+                }
+            }
+            $items[] = $row;
+        }
+
+        return $items;
+    }
+
+    /**
+     * Associatif ağaçta `settings` kökü, çift rail üretmeden çekirdek Ayarlar satırının `children` listesine eklenir.
+     *
+     * @param  array<string, array{shell: array<string, mixed>, entries: array<string, array<string, mixed>>}>  $mergedGroupData
+     */
+    private function mergeTreeGroupIntoExistingRail(array &$menu, string $railGroup, array $mergedGroupData): void
+    {
+        if ($railGroup !== 'settings') {
+            return;
+        }
+        $entries = $mergedGroupData['entries'] ?? [];
+        if ($entries === []) {
+            return;
+        }
+        foreach ($menu as &$group) {
+            if (($group['group'] ?? '') !== $railGroup) {
+                continue;
+            }
+            if (! isset($group['children']) || ! is_array($group['children'])) {
+                $group['children'] = [];
+            }
+            foreach ($entries as $slug => $node) {
+                if (! is_array($node)) {
+                    continue;
+                }
+                $n = $node;
+                $dedupeId = (string) ($n['id'] ?? $slug);
+                $route = $n['route'] ?? null;
+                $duplicate = false;
+                foreach ($group['children'] as $existing) {
+                    if (! is_array($existing)) {
+                        continue;
+                    }
+                    if (is_string($route) && $route !== '' && ($existing['route'] ?? null) === $route) {
+                        $duplicate = true;
+                        break;
+                    }
+                    if ((string) ($existing['id'] ?? '') === $dedupeId) {
+                        $duplicate = true;
+                        break;
+                    }
+                }
+                if ($duplicate) {
+                    continue;
+                }
+                $n['id'] = $dedupeId;
+                $group['children'][] = $n;
+            }
+            break;
+        }
+        unset($group);
+    }
+
+    /**
+     * Root menü düğümleri ve `group_children` + `group_meta` satırlarından üst grup kabuğu ipuçları (ilk tanım kazanır).
+     *
+     * @param  list<array<string, mixed>>  $rootContributions
+     * @param  list<array<string, mixed>>  $groupContributions
+     * @return array<string, array{title: string, sidebar_icon: string, sort: int}>
+     */
+    private function collectGroupShellHints(array $rootContributions, array $groupContributions): array
+    {
+        $hints = [];
+
+        foreach ($rootContributions as $c) {
+            foreach (($c['items'] ?? []) as $node) {
+                if (! is_array($node)) {
+                    continue;
+                }
+                $g = (string) ($node['group'] ?? '');
+                if ($g === '' || isset($hints[$g])) {
+                    continue;
+                }
+                $hints[$g] = [
+                    'title' => (string) ($node['title'] ?? $g),
+                    'sidebar_icon' => (string) ($node['sidebar_icon'] ?? $node['icon'] ?? 'ki-filled ki-element-11'),
+                    'sort' => (int) ($node['sort'] ?? $c['priority'] ?? 500),
+                ];
+            }
+        }
+
+        foreach ($groupContributions as $c) {
+            $g = (string) ($c['group'] ?? '');
+            if ($g === '' || $g === 'security' || isset($hints[$g])) {
+                continue;
+            }
+            $gm = $c['group_meta'] ?? null;
+            if (! is_array($gm)) {
+                continue;
+            }
+            $hints[$g] = [
+                'title' => (string) ($gm['title'] ?? $g),
+                'sidebar_icon' => (string) ($gm['sidebar_icon'] ?? 'ki-filled ki-element-11'),
+                'sort' => isset($gm['sort']) ? (int) $gm['sort'] : 650,
+            ];
+        }
+
+        return $hints;
+    }
+
+    /**
+     * Hedef üst grup yoksa oluşturulacak satır: önce bu katkıdaki `group_meta`, sonra shell ipuçları, son çare grup slug'ı.
+     *
+     * @param  array<string, array{title: string, sidebar_icon: string, sort: int}>  $shellHints
+     * @param  array<string, mixed>  $contribution
+     * @return array{title: string, sidebar_icon: string, sort: int}
+     */
+    private function resolveGroupShellForNewTopLevel(string $group, array $shellHints, array $contribution): array
+    {
+        $entryMeta = $contribution['group_meta'] ?? null;
+        $map = $shellHints[$group] ?? null;
+
+        $m = is_array($entryMeta) ? $entryMeta : [];
+        $h = is_array($map) ? $map : [];
+
+        return [
+            'title' => (string) ($m['title'] ?? $h['title'] ?? $group),
+            'sidebar_icon' => (string) ($m['sidebar_icon'] ?? $h['sidebar_icon'] ?? 'ki-filled ki-element-11'),
+            'sort' => isset($m['sort']) ? (int) $m['sort'] : (isset($h['sort']) ? (int) $h['sort'] : 650),
+        ];
     }
 
     /**
@@ -495,23 +752,6 @@ class AdminMenuService
         return false;
     }
 
-    /**
-     * @return array{title:string,sidebar_icon:string,sort:int}
-     */
-    private function defaultGroupMeta(string $group): array
-    {
-        return match ($group) {
-            'dashboard' => ['title' => 'admin.menu.dashboard.title', 'sidebar_icon' => 'ki-filled ki-chart-line-star', 'sort' => 10],
-            'site_content' => ['title' => 'admin.menu.site_content.title', 'sidebar_icon' => 'ki-filled ki-document', 'sort' => 100],
-            'billing_hub' => ['title' => 'admin.menu.billing_hub.title', 'sidebar_icon' => 'ki-filled ki-cheque', 'sort' => 200],
-            'settings' => ['title' => 'admin.menu.settings.title', 'sidebar_icon' => 'ki-filled ki-setting-2', 'sort' => 10000],
-            'users_operations' => ['title' => 'admin.menu.users_operations.title', 'sidebar_icon' => 'ki-filled ki-users', 'sort' => 300],
-            'security' => ['title' => 'admin.menu.security.title', 'sidebar_icon' => 'ki-filled ki-security-user', 'sort' => 450],
-            'seo_management' => ['title' => 'admin.menu.seo_management.title', 'sidebar_icon' => 'ki-filled ki-search-list', 'sort' => 400],
-            default => ['title' => $group, 'sidebar_icon' => 'ki-filled ki-element-11', 'sort' => 650],
-        };
-    }
-
     private function filterByPermission(array $items, Admin $admin): array
     {
         return collect($items)->map(function ($item) use ($admin) {
@@ -548,7 +788,7 @@ class AdminMenuService
         }
 
         $request = request();
-        $hasRequest = $request instanceof \Illuminate\Http\Request;
+        $hasRequest = $request instanceof Request;
         $permissionSet = [];
         if ($hasRequest) {
             $permissionSet = AdminPermissionSnapshot::permissionsForRequest($request, $admin);
@@ -561,6 +801,7 @@ class AdminMenuService
                     if (in_array($normalized, $permissionSet, true)) {
                         return true;
                     }
+
                     continue;
                 }
                 if ($admin->hasPermission($normalized)) {
@@ -702,6 +943,7 @@ class AdminMenuService
                     'url' => $url,
                     'active' => $currentRoute !== '' && $this->matchesCurrentRoute($node, $currentRoute),
                 ];
+
                 continue;
             }
 

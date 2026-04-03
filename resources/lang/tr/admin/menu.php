@@ -14,6 +14,9 @@ return [
     'site_content' => [
         'title' => 'İçerik',
     ],
+    'customers' => [
+        'title' => 'Müşteriler',
+    ],
     'media_library' => [
         'title' => 'Medya kütüphanesi',
     ],
@@ -22,6 +25,16 @@ return [
     ],
     'billing_hub' => [
         'title' => 'Ödemeler & Talepler',
+        'payments' => 'Ödemeler',
+        'orders' => 'Siparişler',
+        'invoices' => 'Faturalar',
+        'currencies' => 'Para birimleri',
+        'coupons' => 'Kuponlar',
+        'campaigns' => 'Kampanyalar',
+        'bank_accounts' => 'Banka hesapları',
+        'accounting' => 'Muhasebe',
+        'bank_transfers' => 'Banka transfer bildirimleri',
+        'payment_notification_settings' => 'Ödeme bildirim ayarları',
     ],
     'user_management' => [
         'title' => 'Kullanıcı Yönetimi',
@@ -45,6 +58,12 @@ return [
         'integrations_management' => [
             'title' => 'Entegrasyon Yönetimi',
             'payment' => 'Ödeme Sistemleri',
+        ],
+        'contact_information' => [
+            'title' => 'İletişim bilgileri',
+        ],
+        'license_ops' => [
+            'title' => 'License Ops',
         ],
         'lang_management' => [
             'title' => 'Dil Yönetimi',
@@ -87,6 +106,9 @@ return [
             'categories' => 'Kategoriler',
             'faqs' => 'Sorular',
         ],
+        'reviews' => 'Yorumlar',
+        'navigation_menus' => 'Menü yönetimi',
+        'media_management' => 'Medya yönetimi',
     ],
     'security' => [
         'title' => 'Güvenlik Yönetimi',
