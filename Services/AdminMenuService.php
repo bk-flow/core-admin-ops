@@ -105,103 +105,29 @@ class AdminMenuService
     }
 
     /**
-     * Çekirdek panel: yalnızca pano + ayarlar. Diğer üst bölümler modül `config/menu.php`
-     * içinde `placement: root` veya `group_children` ile eklenir.
+     * Çekirdek menü satırları yok: `dashboard`, `settings` ve alt öğeleri ilgili modüllerin `config/menu.php` dosyaları sağlar.
      *
      * @return list<array<string,mixed>>
      */
     private function coreBaseMenu(): array
     {
+        return [];
+    }
+
+    /**
+     * @param  array{shell: array<string, mixed>, entries: array<string, array<string, mixed>>}  $settingsTreePayload
+     * @return array<string, mixed>
+     */
+    private function buildSettingsRailFromTreePayload(array $settingsTreePayload): array
+    {
+        $shell = $settingsTreePayload['shell'] ?? [];
+
         return [
-            [
-                'title' => 'admin.menu.dashboard.title',
-                'group' => 'dashboard',
-                'sort' => 10,
-                'sidebar_icon' => 'ki-filled ki-chart-line-star',
-                'route' => 'cms.admin.dashboard',
-                'permission' => 'dashboard_read',
-                'active_routes' => ['cms.admin.dashboard'],
-            ],
-            [
-                'title' => 'admin.menu.settings.title',
-                'group' => 'settings',
-                'sort' => 10000,
-                'sidebar_icon' => 'ki-filled ki-setting-2',
-                'children' => [
-                    [
-                        'id' => self::SETTINGS_SUBGROUP_PANEL_USERS,
-                        'title' => 'admin.menu.settings.panel_users.title',
-                        'children' => [
-                            [
-                                'title' => 'admin.menu.user_management.users',
-                                'route' => 'cms.admin.admins.index',
-                                'permission' => 'admins_read',
-                                'active_routes' => ['cms.admin.admins.index', 'cms.admin.admins.data', 'cms.admin.admins.add', 'cms.admin.admins.edit', 'cms.admin.admins.del', 'cms.admin.admins.restore', 'cms.admin.admins.force_del', 'cms.admin.admins.activityLogs'],
-                            ],
-                            [
-                                'title' => 'admin.menu.user_management.roles',
-                                'route' => 'cms.admin.admins.roles',
-                                'permission' => 'roles_read',
-                                'active_routes' => ['cms.admin.admins.roles', 'cms.admin.admins.role.*'],
-                            ],
-                        ],
-                    ],
-                    [
-                        'title' => 'admin.menu.security.cache_manager.title',
-                        'route' => 'cms.admin.cache-manager.status',
-                        'permission' => 'cache_read',
-                        'active_routes' => ['cms.admin.cache-manager.*'],
-                    ],
-                    [
-                        'title' => 'admin.menu.security.database_operations.title',
-                        'route' => 'cms.admin.db-operations.index',
-                        'permission' => 'database_read',
-                        'active_routes' => ['cms.admin.db-operations.*'],
-                    ],
-                    [
-                        'id' => self::SETTINGS_SUBGROUP_SECURITY,
-                        'title' => 'admin.menu.settings.security_section.title',
-                        'children' => [
-                            [
-                                'title' => 'admin.menu.security.ip_management.title',
-                                'route' => 'cms.admin.ip-whitelist.index',
-                                'permission' => 'ip_whitelist_read',
-                                'active_routes' => ['cms.admin.ip-whitelist.*', 'cms.admin.ip-blacklist.*'],
-                            ],
-                        ],
-                    ],
-                    [
-                        'title' => 'admin.menu.settings.integrations_management.title',
-                        'route' => 'cms.admin.integrations.index',
-                        'permission' => 'general_settings_read',
-                        'active_routes' => ['cms.admin.integrations.*'],
-                    ],
-                    [
-                        'title' => 'admin.menu.settings.lang_management.title',
-                        'route' => 'cms.admin.language.index',
-                        'permission' => 'languages_read',
-                        'active_routes' => ['cms.admin.language.*'],
-                    ],
-                    [
-                        'id' => self::SETTINGS_SUBGROUP_MAIL,
-                        'title' => 'admin.menu.settings.mail_config.title',
-                        'children' => [
-                            [
-                                'title' => 'admin.menu.settings.mail_config.smtp',
-                                'route' => 'cms.admin.smtp',
-                                'permission' => 'mail_read',
-                                'active_routes' => ['cms.admin.smtp', 'cms.admin.smtp.*'],
-                            ],
-                            [
-                                'title' => 'admin.menu.settings.mail_config.templates',
-                                'route' => 'cms.admin.mail.templates',
-                                'permission' => 'mail_template_read',
-                                'active_routes' => ['cms.admin.mail.templates*'],
-                            ],
-                        ],
-                    ],
-                ],
-            ],
+            'title' => (string) ($shell['title'] ?? 'admin.menu.settings.title'),
+            'group' => 'settings',
+            'sidebar_icon' => (string) ($shell['sidebar_icon'] ?? 'ki-filled ki-setting-2'),
+            'sort' => (int) ($shell['sort'] ?? 10000),
+            'children' => [],
         ];
     }
 
@@ -268,16 +194,13 @@ class AdminMenuService
 
         $shellHints = $this->collectGroupShellHints(array_merge($syntheticTreeRoot, $rootContributions), $groupContributions);
 
-        if (count($baseMenu) < 2) {
-            $menu = $baseMenu;
-        } else {
-            $dashboard = $baseMenu[0];
-            $settings = $baseMenu[1];
-            $mergedRoots = $this->mergeRootMenuNodes(array_merge($syntheticTreeRoot, $rootContributions));
-            $menu = array_merge([$dashboard], $mergedRoots, [$settings]);
-            if ($settingsTreePayload !== null) {
-                $this->mergeTreeGroupIntoExistingRail($menu, 'settings', $settingsTreePayload);
-            }
+        $mergedRoots = $this->mergeRootMenuNodes(array_merge($syntheticTreeRoot, $rootContributions));
+
+        $menu = $mergedRoots;
+
+        if ($settingsTreePayload !== null) {
+            $menu[] = $this->buildSettingsRailFromTreePayload($settingsTreePayload);
+            $this->mergeTreeGroupIntoExistingRail($menu, 'settings', $settingsTreePayload);
         }
 
         foreach ($groupContributions as $contribution) {
@@ -343,7 +266,26 @@ class AdminMenuService
             }
         }
 
+        $this->sortSettingsGroupChildren($menu);
+
         return $this->sortTopLevelMenu($menu);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $menu
+     */
+    private function sortSettingsGroupChildren(array &$menu): void
+    {
+        foreach ($menu as &$top) {
+            if (($top['group'] ?? '') !== 'settings' || ! isset($top['children']) || ! is_array($top['children'])) {
+                continue;
+            }
+
+            usort($top['children'], function (array $a, array $b): int {
+                return ($a['sort'] ?? 500) <=> ($b['sort'] ?? 500);
+            });
+        }
+        unset($top);
     }
 
     /**

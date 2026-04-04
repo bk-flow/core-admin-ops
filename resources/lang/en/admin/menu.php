@@ -26,5 +26,14 @@ return [
         'contact_information' => [
             'title' => 'Contact information',
         ],
+        'localization' => [
+            'title' => 'Localization',
+        ],
+        'lang_management' => [
+            'title' => 'Languages',
+        ],
+        'country_city_management' => [
+            'title' => 'Countries & cities',
+        ],
     ],
 ];

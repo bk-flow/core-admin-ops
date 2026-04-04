@@ -65,8 +65,14 @@ return [
         'license_ops' => [
             'title' => 'License Ops',
         ],
+        'localization' => [
+            'title' => 'Yerelleştirme',
+        ],
         'lang_management' => [
             'title' => 'Dil Yönetimi',
+        ],
+        'country_city_management' => [
+            'title' => 'Ülke ve şehir',
         ],
         'cookie_management' => [
             'title' => 'Çerez yönetimi',

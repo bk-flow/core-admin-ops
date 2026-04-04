@@ -21,6 +21,7 @@
   "enabled": true,
   "active_by_default": true,
   "producer": "Bikare",
+  "order": 1,
   "authors": [
     {
       "name": "Bikare"
@@ -48,7 +49,7 @@
     "has_migrations": false,
     "has_seeders": false,
     "has_assets": false,
-    "has_menu": false
+    "has_menu": true
   },
   "paths": {
     "admin_routes": "Routes/admin.php",
@@ -62,9 +63,9 @@
     "assets": null
   },
   "menu": {
-    "enabled": false,
-    "group": null,
-    "order": null
+    "enabled": true,
+    "group": "dashboard",
+    "order": 1
   },
   "compatibility": {
     "php": "^8.2",
